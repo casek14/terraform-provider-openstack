@@ -2,6 +2,8 @@ package openstack
 
 import (
 	"fmt"
+	"github.com/gophercloud/gophercloud/openstack/networking/v2/extensions/lbaas_v2/loadbalancers"
+	"github.com/gophercloud/gophercloud/openstack/networking/v2/ports"
 	"log"
 
 	"github.com/hashicorp/terraform/helper/schema"
@@ -56,8 +58,42 @@ func resourceNetworkingFloatingIPAssociateV2Create(d *schema.ResourceData, meta 
 		return fmt.Errorf("Unable to get ID of openstack_networking_floatingip_v2: %s", err)
 	}
 
+	var fixedIp string = ""
+	// Get fixed_ip of the port, if fixed ip does not exist get it from LB
+	port,err := ports.Get(networkingClient, portID).Extract()
+	if err != nil {
+		return fmt.Errorf("Unable to get port %s, - %s",portID,err)
+	}
+
+	portIps := port.FixedIPs
+	if len(portIps) > 0 {
+		fixedIp = portIps[0].IPAddress
+		log.Printf("[DEBUG] FIXED IP GET FROM PORT ###############" )
+	}else {
+		// get fixed ip from LB
+		lbClient, err := chooseLBV2Client(d, config)
+		if err != nil {
+			return fmt.Errorf("Error creating OpenStack networking client: %s", err)
+		}
+
+		filter := loadbalancers.ListOpts{VipPortID: portID}
+		allPages, err := loadbalancers.List(lbClient, filter).AllPages()
+		if err != nil {
+			return fmt.Errorf("Error listing loadbalancers: %s", err)
+		}
+		loadbalancers, err := loadbalancers.ExtractLoadBalancers(allPages)
+
+		if len(loadbalancers) == 1 {
+			fixedIp = loadbalancers[0].VipAddress
+			log.Printf("[DEBUG] FIXED IP GET FROM LOADBALANCER ###############" )
+			}
+
+	}
+
+
 	updateOpts := floatingips.UpdateOpts{
 		PortID: &portID,
+		FixedIP: fixedIp,
 	}
 
 	log.Printf("[DEBUG] openstack_networking_floatingip_associate_v2 create options: %#v", updateOpts)
